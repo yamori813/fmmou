@@ -1,10 +1,13 @@
 /*
-
-*/
+ * Copyright (c) 2020 Hiroki Mori
+ *
+ */
 
 #include <IOKit/IOKitLib.h>
 #include <IOKit/IOCFPlugIn.h>
 #include <IOKit/usb/IOUSBLib.h>
+
+#include <mach/mach.h>
 
 #include <CoreFoundation/CoreFoundation.h>
 
@@ -12,46 +15,29 @@
 #define kOurVendorID        0x04b4    //Vendor ID of the USB device
 #define kOurProductID       0x0001    //Product ID of the USB device
 
+#define FMMouseStop	0x00
+#define FMMouseStart	0x01
+#define FMMouseCheck	0x02
+#define FMMouseStatus	0x78
+#define FMMouseFreq	0x79
+#define FMMouseStore	0x7a
+
 //Global variables
 static int			freq;
 static IONotificationPortRef    gNotifyPort;
 static io_iterator_t            gRawAddedIter;
 
-void getstat(IOUSBDeviceInterface **dev)
+void FMGetDevReq(IOUSBDeviceInterface **dev, int index, char *desc, int size)
 {
-    kern_return_t               kr;
+    kern_return_t kr;
     IOUSBDevRequest request;
-    char devDesc[1024];
 
     request.bmRequestType = 0x80;
     request.bRequest = kUSBRqGetDescriptor;
-    request.wValue = kUSBStringDesc << 8 | 0x78;
+    request.wValue = kUSBStringDesc << 8 | index;
     request.wIndex = 0x0409;
-    request.wLength = sizeof(devDesc);
-    request.pData = &devDesc;
-    request.wLenDone = 0;
-
-    kr = (*dev)->DeviceRequest(dev, &request);
-    if (kr != kIOReturnSuccess)
-    {
-            printf("Unable to DeviceRequest: %08x\n", kr);
-    }
-    int val = (devDesc[4] << 8) | devDesc[5];
-    int cfreq = (val - 0x1508) / 8 + 780;
-}
-
-void getname(IOUSBDeviceInterface **dev)
-{
-    kern_return_t               kr;
-    IOUSBDevRequest request;
-    char devDesc[1024];
-
-    request.bmRequestType = 0x80;
-    request.bRequest = kUSBRqGetDescriptor;
-    request.wValue = kUSBStringDesc << 8 | 0x02;
-    request.wIndex = 0x0409;
-    request.wLength = sizeof(devDesc);
-    request.pData = &devDesc;
+    request.wLength = size;
+    request.pData = desc;
     request.wLenDone = 0;
 
     kr = (*dev)->DeviceRequest(dev, &request);
@@ -61,56 +47,24 @@ void getname(IOUSBDeviceInterface **dev)
     }
 }
 
-void setfreq(IOUSBDeviceInterface **dev, int f)
+void FMCtrl(IOUSBDeviceInterface **dev, int index)
 {
-    kern_return_t               kr;
-    IOUSBDevRequest request;
+    char devDesc[1024];
+
+    FMGetDevReq(dev, index, devDesc, sizeof(devDesc));
+}
+
+void FMSetFreq(IOUSBDeviceInterface **dev, int f)
+{
     char devDesc[1024];
 
     int val = 0x1508 + (f - 780) * 8;
 
-    request.bmRequestType = 0x80;
-    request.bRequest = kUSBRqGetDescriptor;
-    request.wValue = kUSBStringDesc << 8 | 0x79;
-    request.wIndex = 0x0409;
-    request.wLength = sizeof(devDesc);
-    request.pData = &devDesc;
-    request.wLenDone = 0;
+    FMGetDevReq(dev, FMMouseFreq, devDesc, sizeof(devDesc));
 
-    kr = (*dev)->DeviceRequest(dev, &request);
-    if (kr != kIOReturnSuccess)
-    {
-            printf("Unable to DeviceRequest: %08x\n", kr);
-    }
+    FMGetDevReq(dev, (val >> 8), devDesc, sizeof(devDesc));
 
-    request.bmRequestType = 0x80;
-    request.bRequest = kUSBRqGetDescriptor;
-    request.wValue = kUSBStringDesc << 8 | (val >> 8);
-    request.wIndex = 0x0409;
-    request.wLength = sizeof(devDesc);
-    request.pData = &devDesc;
-    request.wLenDone = 0;
-
-    kr = (*dev)->DeviceRequest(dev, &request);
-    if (kr != kIOReturnSuccess)
-    {
-            printf("Unable to DeviceRequest: %08x\n", kr);
-    }
-
-    request.bmRequestType = 0x80;
-    request.bRequest = kUSBRqGetDescriptor;
-    request.wValue = kUSBStringDesc << 8 | (val & 0xff);
-    request.wIndex = 0x0409;
-    request.wLength = sizeof(devDesc);
-    request.pData = &devDesc;
-    request.wLenDone = 0;
-
-    kr = (*dev)->DeviceRequest(dev, &request);
-    if (kr != kIOReturnSuccess)
-    {
-            printf("Unable to DeviceRequest: %08x\n", kr);
-    }
-
+    FMGetDevReq(dev, (val & 0xff), devDesc, sizeof(devDesc));
 }
 
 
@@ -125,7 +79,7 @@ void RawDeviceAdded(void *refCon, io_iterator_t iterator)
     UInt16                      vendor;
     UInt16                      product;
  
-    while (usbDevice = IOIteratorNext(iterator))
+    while ((usbDevice = IOIteratorNext(iterator)) != 0)
     {
         //Create an intermediate plug-in
         kr = IOCreatePlugInInterfaceForService(usbDevice,
@@ -174,9 +128,19 @@ void RawDeviceAdded(void *refCon, io_iterator_t iterator)
         }
 
         //Configure device
-        getname(dev);
-        setfreq(dev, freq);
-        getstat(dev);
+        FMCtrl(dev, FMMouseStart);
+        FMCtrl(dev, FMMouseStore);
+
+        FMCtrl(dev, FMMouseCheck);
+        FMSetFreq(dev, freq);
+
+        FMCtrl(dev, FMMouseCheck);
+        FMCtrl(dev, FMMouseStatus);
+
+/*
+        FMCtrl(dev, FMMouseStore);
+        FMCtrl(dev, FMMouseStop);
+*/
  
         //Close this device and release object
         kr = (*dev)->USBDeviceClose(dev);
