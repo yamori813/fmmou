@@ -58,7 +58,7 @@ void FMSetFreq(IOUSBDeviceInterface **dev, int f)
 {
     char devDesc[1024];
 
-    int val = 0x1508 + (f - 780) * 8;
+    int val = 0x1468 + (f - 760) * 8;
 
     FMGetDevReq(dev, FMMouseFreq, devDesc, sizeof(devDesc));
 
